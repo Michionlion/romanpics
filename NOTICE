@@ -1,0 +1,25 @@
+RomanPics is an independent open-source project. It is not affiliated with or
+endorsed by NASA, the Space Telescope Science Institute (STScI), or IPAC.
+
+The MIT License in this repository applies only to project-authored software and
+documentation. It does not relicense images, videos, scientific data, captions,
+logos, names, or metadata supplied by third parties.
+
+RomanPics links to and may display remote renditions from NASA, STScI/MAST,
+IPAC/IRSA, and other credited providers. Each upstream item retains its own
+credit, acknowledgment requirements, and terms of use. Contributors must record
+those details per catalog item and must not use NASA identifiers in a way that
+implies endorsement.
+
+Primary guidance:
+
+- NASA images and media:
+  https://www.nasa.gov/nasa-brand-center/images-and-media/
+- MAST data use:
+  https://archive.stsci.edu/publishing/data-use
+- Mission acknowledgments:
+  https://archive.stsci.edu/publishing/mission-acknowledgements
+
+The generated `public/og.png` social card is project-authored artwork and does
+not contain a NASA logo.
+

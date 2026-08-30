@@ -1,0 +1,589 @@
+openapi: 3.1.0
+info:
+  title: RomanPics API
+  version: 0.1.0-draft
+  description: >-
+    Draft public contract for RomanPics. The API indexes metadata, remote
+    renditions, and provenance; it does not proxy original science products.
+  license:
+    name: MIT
+    identifier: MIT
+security: []
+servers:
+  - url: /api
+    description: Same-origin API
+tags:
+  - name: Items
+    description: Consumer-facing gallery records and their upstream products.
+  - name: Clusters
+    description: Stable, versioned groups of related gallery items.
+  - name: Discovery
+    description: Suggestions, facets, similarity, and editorial collections.
+  - name: Votes
+    description: Low-friction picture and group voting for the current visitor.
+  - name: Sources
+    description: Public freshness and health information for source adapters.
+
+paths:
+  /v1/items:
+    get:
+      tags: [Items]
+      operationId: listItems
+      summary: Search and filter gallery items
+      parameters:
+        - $ref: '#/components/parameters/Query'
+        - $ref: '#/components/parameters/ContentClass'
+        - name: flight_only
+          in: query
+          schema: { type: boolean }
+        - name: instrument
+          in: query
+          schema: { type: string }
+        - name: survey
+          in: query
+          schema: { type: string }
+        - name: optical_element
+          in: query
+          description: Roman filter, prism, grism, or coronagraph mode.
+          schema: { type: string }
+        - name: target
+          in: query
+          schema: { type: string }
+        - name: published_from
+          in: query
+          schema: { type: string, format: date }
+        - name: published_to
+          in: query
+          schema: { type: string, format: date }
+        - name: ra
+          in: query
+          description: ICRS right ascension in decimal degrees. Requires dec and radius.
+          schema: { type: number, minimum: 0, maximum: 360 }
+        - name: dec
+          in: query
+          description: ICRS declination in decimal degrees. Requires ra and radius.
+          schema: { type: number, minimum: -90, maximum: 90 }
+        - name: radius
+          in: query
+          description: Cone-search radius in decimal degrees.
+          schema: { type: number, exclusiveMinimum: 0, maximum: 10 }
+        - name: cluster
+          in: query
+          schema: { type: string }
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [top, trending, newest, relevance]
+            default: newest
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of gallery items.
+          headers:
+            ETag:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ItemPage' }
+        '400': { $ref: '#/components/responses/Problem' }
+
+  /v1/items/{item}:
+    get:
+      tags: [Items]
+      operationId: getItem
+      summary: Get one gallery item by UUID or slug
+      parameters:
+        - $ref: '#/components/parameters/ItemPath'
+      responses:
+        '200':
+          description: Gallery item with provenance and technical summary.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ItemDetail' }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /v1/items/{item}/similar:
+    get:
+      tags: [Discovery]
+      operationId: listSimilarItems
+      summary: List visually and semantically related items
+      parameters:
+        - $ref: '#/components/parameters/ItemPath'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Ranked related items with an explanation of the relationship.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, algorithm_version]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/SimilarItem' }
+                  algorithm_version: { type: string }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /v1/items/{item}/products:
+    get:
+      tags: [Items]
+      operationId: listItemProducts
+      summary: List upstream technical products represented by an item
+      parameters:
+        - $ref: '#/components/parameters/ItemPath'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: External products; download URLs point to the archive.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/ArchiveProduct' }
+                  next_cursor: { type: [string, 'null'] }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /v1/clusters:
+    get:
+      tags: [Clusters]
+      operationId: listClusters
+      summary: Browse similarity groups
+      parameters:
+        - $ref: '#/components/parameters/Query'
+        - $ref: '#/components/parameters/ContentClass'
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [top, trending, newest]
+            default: top
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of stable, versioned similarity groups.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ClusterPage' }
+        '400': { $ref: '#/components/responses/Problem' }
+
+  /v1/clusters/{cluster}:
+    get:
+      tags: [Clusters]
+      operationId: getCluster
+      summary: Get a group and its ranked members
+      parameters:
+        - name: cluster
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Similarity group snapshot.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ClusterDetail' }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /v1/collections/{slug}:
+    get:
+      tags: [Discovery]
+      operationId: getCollection
+      summary: Get an editorial collection
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Ordered collection of items.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Collection' }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /v1/search/suggest:
+    get:
+      tags: [Discovery]
+      operationId: suggestSearch
+      summary: Suggest targets, tags, surveys, and titles
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string, minLength: 2, maxLength: 100 }
+      responses:
+        '200':
+          description: Suggestions ordered by relevance.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    maxItems: 12
+                    items:
+                      type: object
+                      required: [kind, label, value]
+                      properties:
+                        kind: { type: string, enum: [item, target, tag, survey] }
+                        label: { type: string }
+                        value: { type: string }
+        '400': { $ref: '#/components/responses/Problem' }
+
+  /v1/facets:
+    get:
+      tags: [Discovery]
+      operationId: getFacets
+      summary: Get available filters and counts
+      parameters:
+        - $ref: '#/components/parameters/Query'
+      responses:
+        '200':
+          description: Facet values calculated for the current query.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: array
+                  items:
+                    type: object
+                    required: [value, count]
+                    properties:
+                      value: { type: string }
+                      count: { type: integer, minimum: 0 }
+        '400': { $ref: '#/components/responses/Problem' }
+
+  /v1/sources/status:
+    get:
+      tags: [Sources]
+      operationId: listSourceStatus
+      summary: Show catalog freshness and source problems
+      responses:
+        '200':
+          description: Health of each upstream adapter.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, generated_at]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/SourceStatus' }
+                  generated_at: { type: string, format: date-time }
+        '503': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+
+  /v1/me/votes/items/{id}:
+    put:
+      tags: [Votes]
+      operationId: addItemVote
+      summary: Upvote one picture
+      security: [{ visitorCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdPath' }]
+      responses:
+        '200': { $ref: '#/components/responses/Vote' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Votes]
+      operationId: removeItemVote
+      summary: Remove the current visitor's picture vote
+      security: [{ visitorCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdPath' }]
+      responses:
+        '200': { $ref: '#/components/responses/Vote' }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /v1/me/votes/clusters/{id}:
+    put:
+      tags: [Votes]
+      operationId: addClusterVote
+      summary: Upvote one similarity group
+      security: [{ visitorCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdPath' }]
+      responses:
+        '200': { $ref: '#/components/responses/Vote' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Votes]
+      operationId: removeClusterVote
+      summary: Remove the current visitor's group vote
+      security: [{ visitorCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdPath' }]
+      responses:
+        '200': { $ref: '#/components/responses/Vote' }
+        '404': { $ref: '#/components/responses/Problem' }
+
+components:
+  securitySchemes:
+    visitorCookie:
+      type: apiKey
+      in: cookie
+      name: romanpics_visitor
+
+  parameters:
+    Query:
+      name: q
+      in: query
+      schema: { type: string, maxLength: 200 }
+    ContentClass:
+      name: content_class
+      in: query
+      schema:
+        $ref: '#/components/schemas/ContentClass'
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 24 }
+    ItemPath:
+      name: item
+      in: path
+      required: true
+      schema: { type: string }
+    IdPath:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+  responses:
+    Problem:
+      description: RFC 7807 problem response.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Vote:
+      description: Current vote state and aggregate count.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/VoteState' }
+
+  schemas:
+    ContentClass:
+      type: string
+      enum: [FLIGHT_SCIENCE, SIMULATION, GROUND_TEST, MISSION_PHOTO, VISUALIZATION]
+
+    Source:
+      type: object
+      required: [provider, external_id, source_url, credit]
+      properties:
+        provider: { type: string, examples: [NASA_SVS] }
+        external_id: { type: string }
+        source_url: { type: string, format: uri }
+        archive_record_url: { type: [string, 'null'], format: uri }
+        credit: { type: string }
+        rights: { type: [string, 'null'] }
+        rights_url: { type: [string, 'null'], format: uri }
+
+    Rendition:
+      type: object
+      required: [url, width, height, format, provider, site_generated]
+      properties:
+        url: { type: string, format: uri }
+        width: { type: integer, minimum: 1 }
+        height: { type: integer, minimum: 1 }
+        format: { type: string, examples: [image/webp] }
+        provider: { type: string }
+        site_generated: { type: boolean }
+        transformation: { type: [string, 'null'] }
+
+    GalleryItem:
+      type: object
+      required:
+        - id
+        - slug
+        - title
+        - summary
+        - content_class
+        - is_flight_data
+        - source
+        - preview
+        - vote_count
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string }
+        title: { type: string }
+        summary: { type: string }
+        content_class: { $ref: '#/components/schemas/ContentClass' }
+        is_flight_data: { type: boolean }
+        published_at: { type: [string, 'null'], format: date-time }
+        observed_at: { type: [string, 'null'], format: date-time }
+        source: { $ref: '#/components/schemas/Source' }
+        preview: { $ref: '#/components/schemas/Rendition' }
+        alt_text: { type: string }
+        tags:
+          type: array
+          items: { type: string }
+        vote_count: { type: integer, minimum: 0 }
+        viewer_has_voted: { type: boolean, default: false }
+        cluster_id: { type: [string, 'null'], format: uuid }
+
+    ItemDetail:
+      allOf:
+        - $ref: '#/components/schemas/GalleryItem'
+        - type: object
+          required: [originals, observation]
+          properties:
+            originals:
+              type: array
+              items: { $ref: '#/components/schemas/ArchiveProduct' }
+            observation: { $ref: '#/components/schemas/Observation' }
+            processing_note: { type: [string, 'null'] }
+            superseded_by: { type: [string, 'null'], format: uuid }
+
+    Observation:
+      type: [object, 'null']
+      properties:
+        observation_id: { type: string }
+        program_id: { type: [string, 'null'] }
+        survey: { type: [string, 'null'] }
+        instrument: { type: [string, 'null'] }
+        mode: { type: [string, 'null'] }
+        optical_elements:
+          type: array
+          items: { type: string }
+        target: { type: [string, 'null'] }
+        ra: { type: [number, 'null'] }
+        dec: { type: [number, 'null'] }
+        data_level: { type: [string, 'null'] }
+        release_name: { type: [string, 'null'] }
+        pipeline_version: { type: [string, 'null'] }
+
+    ArchiveProduct:
+      type: object
+      required: [id, url, subtype, media_type, active]
+      properties:
+        id: { type: string, format: uuid }
+        url: { type: string, format: uri }
+        subtype: { type: string }
+        media_type: { type: string }
+        byte_size: { type: [integer, 'null'], minimum: 0 }
+        data_level: { type: [string, 'null'] }
+        active: { type: boolean }
+        superseded_by: { type: [string, 'null'], format: uuid }
+
+    SimilarItem:
+      type: object
+      required: [item, score, reasons]
+      properties:
+        item: { $ref: '#/components/schemas/GalleryItem' }
+        score: { type: number, minimum: 0, maximum: 1 }
+        reasons:
+          type: array
+          items:
+            type: string
+            enum: [same_observation, same_target, duplicate, visual, metadata]
+
+    Cluster:
+      type: object
+      required: [id, slug, title, summary, representative, item_count, vote_count, version]
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string }
+        title: { type: string }
+        summary: { type: string }
+        content_class: { $ref: '#/components/schemas/ContentClass' }
+        representative: { $ref: '#/components/schemas/GalleryItem' }
+        item_count: { type: integer, minimum: 1 }
+        vote_count: { type: integer, minimum: 0 }
+        viewer_has_voted: { type: boolean, default: false }
+        version: { type: string }
+        archived_at: { type: [string, 'null'], format: date-time }
+
+    ClusterDetail:
+      allOf:
+        - $ref: '#/components/schemas/Cluster'
+        - type: object
+          required: [members]
+          properties:
+            members:
+              type: array
+              items: { $ref: '#/components/schemas/GalleryItem' }
+            next_cursor: { type: [string, 'null'] }
+
+    Collection:
+      type: object
+      required: [slug, title, summary, items]
+      properties:
+        slug: { type: string }
+        title: { type: string }
+        summary: { type: string }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/GalleryItem' }
+
+    ItemPage:
+      type: object
+      required: [data, total_estimate]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/GalleryItem' }
+        next_cursor: { type: [string, 'null'] }
+        total_estimate: { type: integer, minimum: 0 }
+
+    ClusterPage:
+      type: object
+      required: [data, total_estimate]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Cluster' }
+        next_cursor: { type: [string, 'null'] }
+        total_estimate: { type: integer, minimum: 0 }
+
+    VoteState:
+      type: object
+      required: [target_kind, target_id, viewer_has_voted, vote_count]
+      properties:
+        target_kind: { type: string, enum: [item, cluster] }
+        target_id: { type: string, format: uuid }
+        viewer_has_voted: { type: boolean }
+        vote_count: { type: integer, minimum: 0 }
+
+    SourceStatus:
+      type: object
+      required: [adapter, state, last_success_at, record_count]
+      properties:
+        adapter: { type: string }
+        state: { type: string, enum: [healthy, delayed, degraded] }
+        last_success_at: { type: [string, 'null'], format: date-time }
+        last_error_at: { type: [string, 'null'], format: date-time }
+        public_message: { type: [string, 'null'] }
+        record_count: { type: integer, minimum: 0 }
+
+    Problem:
+      type: object
+      required: [type, title, status]
+      properties:
+        type: { type: string, format: uri-reference }
+        title: { type: string }
+        status: { type: integer, minimum: 400, maximum: 599 }
+        detail: { type: string }
+        instance: { type: string, format: uri-reference }
+        errors:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
