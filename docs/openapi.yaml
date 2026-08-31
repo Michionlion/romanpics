@@ -1,9 +1,9 @@
 openapi: 3.1.0
 info:
   title: RomanPics API
-  version: 0.1.0-draft
+  version: 0.2.0
   description: >-
-    Draft public contract for RomanPics. The API indexes metadata, remote
+    Public contract for the RomanPics reference API. It indexes metadata, remote
     renditions, and provenance; it does not proxy original science products.
   license:
     name: MIT
@@ -49,6 +49,9 @@ paths:
         - name: target
           in: query
           schema: { type: string }
+        - name: tag
+          in: query
+          schema: { type: string }
         - name: published_from
           in: query
           schema: { type: string, format: date }
@@ -77,6 +80,10 @@ paths:
             enum: [top, trending, newest, relevance]
             default: newest
         - $ref: '#/components/parameters/Cursor'
+        - name: page
+          in: query
+          description: One-based convenience pagination; mutually exclusive with cursor.
+          schema: { type: integer, minimum: 1 }
         - $ref: '#/components/parameters/Limit'
       responses:
         '200':
@@ -213,6 +220,19 @@ paths:
               schema: { $ref: '#/components/schemas/Collection' }
         '404': { $ref: '#/components/responses/Problem' }
 
+  /v1/collections:
+    get:
+      tags: [Discovery]
+      operationId: listCollections
+      summary: List published editorial collections
+      responses:
+        '200':
+          description: Published collections with item counts.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CollectionPage' }
+        '400': { $ref: '#/components/responses/Problem' }
+
   /v1/search/suggest:
     get:
       tags: [Discovery]
@@ -288,6 +308,33 @@ paths:
                   generated_at: { type: string, format: date-time }
         '503': { $ref: '#/components/responses/Problem' }
         '429': { $ref: '#/components/responses/Problem' }
+
+  /v1/surprise:
+    get:
+      tags: [Discovery]
+      operationId: getSurprise
+      summary: Choose one unexpected catalog item
+      parameters:
+        - name: mode
+          in: query
+          schema:
+            type: string
+            enum: [anything, galaxies, mission, calm, engineering]
+            default: anything
+      responses:
+        '200':
+          description: A randomly selected item. This response is never cached.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mode, item]
+                properties:
+                  mode:
+                    type: string
+                    enum: [anything, galaxies, mission, calm, engineering]
+                  item: { $ref: '#/components/schemas/GalleryItem' }
+        '404': { $ref: '#/components/responses/Problem' }
 
   /v1/me/votes/items/{id}:
     put:
@@ -532,6 +579,24 @@ components:
         items:
           type: array
           items: { $ref: '#/components/schemas/GalleryItem' }
+
+    CollectionSummary:
+      type: object
+      required: [slug, title, summary, item_count, updated_at]
+      properties:
+        slug: { type: string }
+        title: { type: string }
+        summary: { type: string }
+        item_count: { type: integer, minimum: 0 }
+        updated_at: { type: string, format: date-time }
+
+    CollectionPage:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/CollectionSummary' }
 
     ItemPage:
       type: object

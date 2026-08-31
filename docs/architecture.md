@@ -1,16 +1,21 @@
 # RomanPics architecture
 
-Status: proposed architecture for the MVP and science-operations transition.
+Status: implemented launch-era reference stack with explicit operational gates.
+The frontend, API, PostgreSQL schema, adapters, voting, and PostgreSQL worker
+exist. Scheduled ingestion, routine worker operation, and the production MAST
+adapter remain gated.
 
 ## Product definition
 
 RomanPics is a consumer discovery layer over authoritative Roman sources. It
 does not replace MAST, IRSA, or NASA media repositories.
 
-“The entire catalog” means every public Roman-related record is discoverable and
-linked, but not every detector file becomes a separate gallery card. The gallery
-unit is a stable `gallery_item` that can group many archive products from one
-observation, sky cell, target, filter stack, release, or outreach composite.
+The target meaning of “the entire catalog” is that every appropriate public
+Roman-related record is discoverable and linked, not that every detector file
+becomes a separate gallery card. Today the portable catalog has eight reviewed
+launch-era records. During science operations, the gallery unit remains a stable
+`gallery_item` that can group many archive products from one observation, sky
+cell, target, filter stack, release, or outreach composite.
 
 ### Goals
 
@@ -29,7 +34,7 @@ observation, sky cell, target, filter stack, release, or outreach composite.
 - Replacing scientific analysis tools.
 - Making unreviewed AI claims about objects in an image.
 
-## Proposed topology
+## Implemented baseline and target topology
 
 ```text
                               ┌──────────────────────┐
@@ -40,9 +45,9 @@ MAST Roman / subscriptions ─> │                      │
                               └──────────┬───────────┘
                                          │ normalized records/jobs
                               ┌──────────▼───────────┐
-                              │ PostgreSQL           │
-                              │ FTS + pg_trgm        │
-                              │ pgvector when needed │
+                              │ PostgreSQL 17        │
+                              │ portable search      │
+                              │ jobs + catalog       │
                               └──────┬────────┬──────┘
                                      │        │
                          ┌───────────▼─┐   ┌──▼────────────────┐
@@ -58,9 +63,21 @@ MAST Roman / subscriptions ─> │                      │
                          └─────────────┘   └───────────────────┘
 ```
 
-One worker and a PostgreSQL-backed jobs table are enough initially. Do not add
-Redis, Elasticsearch, Kafka, or a microservice per source until evidence demands
-them.
+The repository implements one FastAPI service, one PostgreSQL-backed jobs table,
+and one optional worker profile. Render, embedding, stable-cluster graph, and
+link-check results persist transactionally. Cluster replacement is serialized,
+content-class partitioned, and reconciled to existing stable identities. No
+Redis, Elasticsearch, Kafka, or microservice-per-source architecture is
+justified.
+
+| Surface | Current state |
+| --- | --- |
+| Frontend | Vinext application with API-aware SSR and explicit checked-in fallback |
+| API | FastAPI `/v1`, curated OpenAPI 3.1 contract, ETags, reads, votes, and operator CLI |
+| Database | PostgreSQL 17 in production-shaped Compose; SQLite only for local/test compatibility |
+| Worker | Opt-in Compose `worker` profile with PostgreSQL leases, safe fetch, and durable preview/embedding/cluster/link-check persistence |
+| Hosting | Separately hosted frontend plus VPS backend/Nginx bundle; no Netlify or VPS frontend package yet |
+| MAST | Fixture-only until documented production Roman interfaces are verified |
 
 ## Frontend scope
 
@@ -72,10 +89,17 @@ them.
 | `/images/{slug}` | Large preview, plain-language caption, badges, credit, source/original links, technical details, related items |
 | `/groups` | Similarity neighborhoods ranked by explicit group votes |
 | `/groups/{slug}` | Group members and community-selected representative |
+| `/collections` | Browse editorial paths through the launch-era catalog |
 | `/collections/{slug}` | Editorial stories such as First Light or Galaxies |
-| `/sky` | Later: coordinate/footprint map and cone search |
+| `/sky` | Prepared coordinate/footprint search with an honest pre-science empty state |
+| `/journey` | Follow launch, commissioning, first-image, and science milestones |
+| `/compare/filters` | Accessible same-region filter-comparison prototype |
+| `/compare/field-of-view` | Explanatory Roman/Hubble/Webb field-of-view comparison |
+| `/tools/color` | Teaching tool for assigned-color infrared composites |
 | `/about/images` | Explain simulations, infrared color, data levels, sources, and rights |
 | `/status` | Last successful sync and known source problems |
+| `/embed/gallery` | Small, non-indexed, source-linked gallery card |
+| `/feed.xml`, `/atom.xml` | Portable-catalog discovery feeds |
 
 ### Nontechnical defaults
 
@@ -91,27 +115,28 @@ them.
 
 ## Source adapters
 
-All providers implement a narrow boundary so an evolving upstream schema does
-not leak into the public API:
+All providers implement a narrow Python boundary so an evolving upstream schema
+does not leak into the public API. Asset and preview candidates travel inside the
+normalized record rather than through separate public methods:
 
-```ts
-interface SourceAdapter {
-  discover(cursor?: string, modifiedSince?: string): Promise<SourcePage>;
-  normalize(record: unknown): Promise<NormalizedRecord>;
-  listAssets(record: unknown): Promise<ExternalAsset[]>;
-  resolvePreview(record: unknown): Promise<PreviewCandidate | null>;
-}
+```python
+class SourceAdapter:
+    async def discover(
+        self, cursor: str | None, modified_since: datetime | None
+    ) -> SourcePage: ...
+
+    async def normalize(self, record: dict[str, object]) -> NormalizedRecord: ...
 ```
 
-Planned adapters:
+Implemented adapters:
 
 | Adapter | Initial behavior |
 | --- | --- |
-| `nasa_images` | REST search, asset manifest, and metadata endpoints; use official renditions |
+| `nasa_images` | REST search and asset-manifest endpoints; use official renditions |
 | `nasa_svs` | Roman search/detail JSON; preserve alt text, credits, and media sizes |
 | `ipac_manifest` | Versioned, reviewed manifest for simulations without a stable catalog API |
-| `mast_roman` | Mission Search/DAAPI/astroquery only through documented interfaces; prefer L3 gallery records |
-| `editorial` | Checked-in records for important first-light releases and cross-source composites |
+| `mast_roman` | Fixture-only lifecycle contract; production Mission Search/DAAPI/astroquery access remains disabled |
+| `static_catalog` | Checked-in records and graph for launch-era and future special releases |
 
 Rules for every adapter:
 
@@ -157,7 +182,7 @@ Rules for every adapter:
 
 Join a gallery item to one or more archive products. A rendition records
 `provider`, `url`, `width`, `height`, `format`, `is_site_derivative`, `recipe`,
-`alt_text`, `credit`, `rights_url`, and `last_verified_at`.
+`alt_text`, `credit`, `rights`, `rights_url`, and `last_verified_at`.
 
 ### Discovery and community tables
 
@@ -165,25 +190,34 @@ Join a gallery item to one or more archive products. A rendition records
 - `embedding` — item ID, model/version, vector, perceptual hash.
 - `cluster` / `cluster_member` — algorithm version, stable label, centroid,
   similarity, rank, active/archived state.
-- `vote_event` — actor, target kind, target ID, operation, timestamp.
+- `active_vote` — one current vote per actor, target kind, and target ID.
+- `vote_event` — append-only actor, target, operation, network HMAC, and timestamp.
 - `vote_total` — materialized count per target.
 - `collection` / `collection_item` — editorial sequences.
 - `ingest_run` / `job` — source health, retry, and observability.
 
-Use PostgreSQL full-text search plus `pg_trgm` first. Store a HEALPix key for
-coordinate prefiltering. Add pgvector HNSW only when the catalog is large enough
-for brute-force similarity to become a measured problem.
+Current search uses portable case-insensitive substring matching so the same API
+works in PostgreSQL and SQLite tests. The schema already stores a HEALPix key for
+future coordinate prefiltering. Add PostgreSQL full-text search and `pg_trgm`
+only after relevance or latency measurements justify them; add pgvector HNSW
+only when brute-force similarity becomes a measured problem. Neither extension
+is a deployed dependency today.
 
 ## Ingestion flow
 
-1. A scheduled poll, MAST subscription, or manual release trigger starts a run.
+1. An operator CLI invocation starts a run today; a scheduled poll, MAST
+   subscription, or release trigger can invoke the same service later.
 2. The adapter discovers changed records and stores the raw response.
 3. Normalization validates content class, provenance, rights, and upstream IDs.
 4. Asset resolution selects an official remote rendition where possible.
 5. Records and assets are upserted atomically; superseded versions remain linked.
-6. The worker calculates hashes, embeddings, tags, and group candidates.
-7. Search documents and cached counts are refreshed.
-8. A source-health row records duration, counts, errors, and the next cursor.
+6. The worker calculates hashes, embeddings, and group candidates when its
+   Compose profile is active.
+7. Render and embedding results persist transactionally. Cluster membership and
+   directional similarity edges replace the prior computed graph atomically,
+   while stable-ID reconciliation preserves voted group identity.
+8. Search documents and cached counts are refreshed by ingestion/seed logic.
+9. A source-health row records duration, counts, errors, and the next cursor.
 
 Failures are retryable per record. One malformed record must not roll back an
 entire source run.
@@ -216,9 +250,10 @@ Similarity has three understandable layers:
 3. **Visual + semantic neighbors** — a small OpenCLIP/SigLIP image embedding
    fused with trusted metadata similarity.
 
-Partition by content class before visual clustering so cleanroom photography
-does not mix with flight-science images. Expose nearest neighbors immediately;
-run HDBSCAN or graph clustering on a nightly/weekly schedule.
+The worker partitions by content class before graph clustering so cleanroom
+photography cannot mix with flight-science images. The portable seed exposes
+reviewed nearest neighbors immediately. The worker can publish a computed graph
+atomically; a nightly/weekly production schedule is not enabled yet.
 
 Cluster IDs must remain stable. Match a new clustering run to previous clusters
 using membership overlap and centroid distance. If a voted cluster splits or
@@ -235,8 +270,10 @@ Picture votes and group votes are separate:
 
 - **Top pictures:** trusted picture-vote count.
 - **Top groups:** explicit group-vote count; group size contributes nothing.
-- **Representative:** highest-ranked picture inside a group.
-- **Trending:** recent votes with time decay.
+- **Representative:** an explicitly stored/seeded member today; member-vote-based
+  automatic selection is a future policy.
+- **Trending:** currently uses the same aggregate vote ordering as top; a
+  time-decayed recent-vote score is future work.
 - **New:** observation/publication date, not ingestion time.
 
 MVP anonymous voting:
@@ -245,17 +282,24 @@ MVP anonymous voting:
 - enforce one active vote per `(actor, target_kind, target_id)` and allow undo;
 - keep short-lived daily HMACs of IP prefixes for abuse throttling, never raw IPs;
 - verify `Origin`, apply CSRF protection, and trust client IPs only from the edge;
-- invoke a challenge such as Turnstile only after suspicious behavior;
+- add a challenge such as Turnstile only if observed abuse justifies it; and
 - retain append-only vote events for audit and expose aggregate totals only.
+
+The signed cookie, active-vote uniqueness, exact-Origin validation, daily
+network-prefix HMAC, append-only events, aggregate totals, and replaceable
+in-process limiter are implemented. Nginx supplies a second mutation limit. The
+challenge is not implemented.
 
 Optional email/passkey accounts can later sync favorites but are not required to
 browse or vote.
 
 ## Public API
 
-The public surface is cache-friendly REST with cursor pagination, ETags,
-appropriate `Cache-Control`, RFC 7807 problem responses, and an OpenAPI 3.1
-document. See [openapi.yaml](openapi.yaml) for the draft contract.
+The public surface is cache-friendly REST with cursor pagination, one-based page
+compatibility, ETags, appropriate `Cache-Control`, RFC 7807 problem responses,
+and an OpenAPI 3.1 document. The curated
+[OpenAPI contract](openapi.yaml) is linted and checked against FastAPI's runtime
+methods and operation IDs in CI.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -265,10 +309,12 @@ document. See [openapi.yaml](openapi.yaml) for the draft contract.
 | GET | `/v1/items/{id}/products` | upstream technical products |
 | GET | `/v1/clusters` | browse similarity groups |
 | GET | `/v1/clusters/{id-or-slug}` | members and representative |
+| GET | `/v1/collections` | published editorial collections |
 | GET | `/v1/collections/{slug}` | editorial collection |
 | GET | `/v1/search/suggest?q=` | suggestions |
 | GET | `/v1/facets` | filter counts |
 | GET | `/v1/sources/status` | freshness and known errors |
+| GET | `/v1/surprise` | one no-store discovery result by mood/subject |
 | PUT/DELETE | `/v1/me/votes/items/{id}` | add/remove picture vote |
 | PUT/DELETE | `/v1/me/votes/clusters/{id}` | add/remove group vote |
 
@@ -276,36 +322,38 @@ Every item response includes `content_class`, explicit flight/simulation state,
 source and archive URLs, remote original, preview, credit, rights, and any site
 transformation recipe.
 
-## Deployment decision
+## Deployment
 
-The repository's current UI is a lightweight Vinext prototype. The production
-backend should be deployed only after the first source spike validates real MAST
-records and preview behavior.
+The repository includes a Vinext frontend, FastAPI/SQLAlchemy service, Alembic
+migration, PostgreSQL 17 Compose service, and opt-in Python worker. NASA Images,
+SVS, and reviewed manifests can be synchronized now; only production MAST remains
+gated pending a documented preview path.
 
 | Option | Good fit | Limitations | Decision |
 | --- | --- | --- | --- |
-| Existing VPS | API, worker, PostgreSQL/pgvector, controlled disk/cache, predictable cost | owner operates backups, updates, monitoring | preferred MVP production home |
-| Netlify free | frontend and pull-request previews | usage/credit limits; no place for astronomy processing or PostgreSQL | optional frontend only |
+| Existing VPS | API, worker, PostgreSQL, controlled preview disk, predictable cost | owner operates backups, updates, monitoring; frontend image is not packaged | preferred stateful backend home |
+| Sites | Existing Vinext-compatible frontend project and preview deployments | separately hosted from the VPS API; cross-site cookie/CORS configuration may be required | implemented frontend path |
+| Netlify free | possible future frontend/deploy-preview host | no checked-in `netlify.toml` or static-export contract; no astronomy processing or PostgreSQL | not currently supported |
 | Object storage/CDN | small generated previews | another service to operate; respect rights | add only when VPS disk/egress is measured |
 
-The nearby VPS edge was inspected and is **Nginx + Certbot**, not Traefik. A
-future deployment should join a dedicated Docker network and add a narrowly
-scoped Nginx virtual host; it must not publish the neighboring website directory
-or copy its secrets into this repository.
+The nearby VPS edge is **Nginx + Certbot**, not Traefik. The repository includes
+a dedicated external Docker-network attachment, API virtual-host templates, and
+a read-only preview-volume mount. It must not publish the neighboring website
+directory or copy its secrets into this repository.
 
-Suggested VPS services:
+Deployed backend service shape:
 
 ```text
-edge Nginx
-└── romanpics-web/API
-    └── private application network
-        ├── PostgreSQL 16 + pgvector
-        └── one scheduled worker
+separately hosted Vinext frontend
+└── HTTPS API origin on edge Nginx
+    ├── FastAPI on isolated edge network
+    ├── private PostgreSQL 17 catalog network
+    └── optional worker on catalog + egress networks
 ```
 
-The exact frontend runtime can stay flexible until the backend slice begins.
-Avoid splitting frontend hosting from the API unless Netlify previews materially
-improve the contribution workflow.
+`compose.yaml` is backend-only. Serving the frontend from the VPS requires a
+separately reviewed web image/service and virtual host. See
+[`infra/README.md`](../infra/README.md) for exact deployment boundaries.
 
 ## Security, privacy, and operations
 
@@ -319,7 +367,7 @@ improve the contribution workflow.
 - Keep the first gallery load under roughly 1 MB and lazy-load below-fold media.
 - Verify at least 95% of outbound links weekly and surface dead links internally.
 
-## Open questions to validate in the source spike
+## Open questions before production MAST ingestion
 
 1. Which documented Roman API fields remain stable after first-flight products?
 2. When will supported preview and WFI cutout URLs be available outside Mission Search?
@@ -327,4 +375,3 @@ improve the contribution workflow.
 4. Which prompt L3 products are most suitable as one consumer-facing image unit?
 5. How should a prompt gallery item migrate to a preserved data-release product?
 6. What thumbnail volume and egress actually occur after first light?
-

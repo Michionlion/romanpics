@@ -1,0 +1,23 @@
+{
+  "status": "COMPLETE",
+  "fields": [
+    {"name": "dataURI", "type": "string"},
+    {"name": "checksum", "type": "string"},
+    {"name": "release_kind", "type": "string"}
+  ],
+  "data": [
+    {
+      "logical_key": "ROMAN-DEMO-001:WFI01:F158:L3-MOSAIC",
+      "obs_id": "ROMAN-DEMO-001",
+      "detector": "WFI01",
+      "filter": "F158",
+      "productSubGroupDescription": "L3-MOSAIC",
+      "dataURI": "mast:ROMAN/product/roman-demo-001-final.asdf",
+      "checksum": "sha256:final-generation-one",
+      "size": 1008,
+      "lastModified": "2027-03-05T12:00:00Z",
+      "release_kind": "final",
+      "supersedes": ["mast:ROMAN/product/roman-demo-001-prompt.asdf"]
+    }
+  ]
+}

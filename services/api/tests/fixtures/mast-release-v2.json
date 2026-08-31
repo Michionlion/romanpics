@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "records": [
+    {
+      "external_id": "r0000101001001001001-coadd-release-v2",
+      "supersedes_external_id": "r0000101001001001001-coadd-prompt-v1",
+      "slug": "fixture-roman-first-light-release",
+      "provider": "MAST_ROMAN",
+      "canonical_url": "https://mast.stsci.edu/roman-fixtures/r0000101001001001001-coadd-release-v2",
+      "title": "Fixture Roman preserved release mosaic",
+      "summary": "Synthetic contract fixture for a preserved Roman data-release L3 mosaic.",
+      "content_class": "FLIGHT_SCIENCE",
+      "is_flight_data": true,
+      "alt_text": "A synthetic fixture representing a preserved Roman release mosaic.",
+      "credit": "NASA / STScI (fixture; not real flight data)",
+      "processing_note": "Test fixture only. Models prompt-to-release supersession.",
+      "tags": ["fixture", "WFI", "mosaic", "data release"],
+      "observation": {"observation_id": "r0000101001001001001", "instrument": "WFI", "mode": "imaging", "optical_elements": ["F158"], "target": "Fixture Field", "ra": 150.0, "dec": 2.0, "data_level": "L3", "product_version": "release-v2", "pipeline_version": "1.0-fixture", "release_name": "DR1"},
+      "products": [{"url": "https://mast.stsci.edu/roman-fixtures/r0000101001001001001_release_coadd.asdf", "subtype": "coadd", "media_type": "application/x-asdf", "data_level": "L3", "is_original": true}],
+      "renditions": [{"url": "https://mast.stsci.edu/roman-fixtures/r0000101001001001001_release_preview.jpg", "width": 768, "height": 768, "format": "image/jpeg", "provider": "MAST_ROMAN"}]
+    }
+  ]
+}

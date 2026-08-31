@@ -1,6 +1,6 @@
 {
   "name": "romanpics",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "engines": {
     "node": ">=22.13.0"
@@ -10,9 +10,12 @@
     "build": "vinext build",
     "start": "wrangler dev --config dist/server/wrangler.json",
     "lint": "oxlint",
-    "lint:api": "npx --yes @redocly/cli@2.49.0 lint docs/openapi.yaml",
+    "lint:api": "redocly lint docs/openapi.yaml",
+    "api:contract": "node scripts/check-openapi-drift.mjs",
+    "catalog:check": "node scripts/check-catalog.mjs",
+    "catalog:links": "node scripts/check-catalog.mjs --links",
     "typecheck": "tsc --noEmit",
-    "check": "npm run lint && npm run typecheck && npm run lint:api && npm run build",
+    "check": "npm run lint && npm run typecheck && npm run catalog:check && npm run lint:api && npm run api:contract && npm run build",
     "format": "oxfmt"
   },
   "dependencies": {
@@ -31,6 +34,7 @@
     "@cloudflare/vite-plugin": "1.54.2",
     "@cloudflare/workers-types": "5.20260830.1",
     "@openai/sites-vite-plugin": "0.2.0",
+    "@redocly/cli": "2.49.0",
     "@tailwindcss/postcss": "4.2.1",
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",

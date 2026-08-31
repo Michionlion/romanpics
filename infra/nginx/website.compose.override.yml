@@ -1,0 +1,18 @@
+# Apply alongside /home/saejin/projects/website/docker-compose.yml. It extends
+# the existing Nginx service; it does not replace its current site networks.
+services:
+  nginx:
+    networks:
+      - romanpics-edge
+    volumes:
+      - romanpics-previews:/var/www/romanpics-previews:ro
+
+volumes:
+  romanpics-previews:
+    name: romanpics-previews
+    external: true
+
+networks:
+  romanpics-edge:
+    name: romanpics-edge
+    external: true

@@ -1,0 +1,30 @@
+name: Bug report
+description: Report an accessibility, catalog, API, or display problem.
+title: '[bug] '
+labels: ['bug']
+body:
+  - type: textarea
+    id: observed
+    attributes:
+      label: What happened?
+      description: Include the page or API URL and the visible result.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Browser or client
+      placeholder: Firefox 128, curl 8, screen reader, etc.
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy
+      options:
+        - label: This report contains no cookies, credentials, raw IP addresses, or private data.
+          required: true

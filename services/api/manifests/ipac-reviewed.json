@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "records": [
+    {
+      "external_id": "openuniverse2024-overview",
+      "slug": "open-universe-2024-preview",
+      "provider": "IPAC_IRSA",
+      "canonical_url": "https://irsa.ipac.caltech.edu/data/theory/openuniverse2024/overview.html",
+      "title": "OpenUniverse2024 Roman simulation preview",
+      "summary": "A reviewed entry for Roman WFI simulations from OpenUniverse2024. This is synthetic data, not a Roman observation.",
+      "content_class": "SIMULATION",
+      "is_flight_data": false,
+      "alt_text": "A reviewed preview associated with the OpenUniverse2024 Roman simulation collection.",
+      "credit": "OpenUniverse2024 collaboration / NASA IPAC",
+      "rights": "See the upstream collection for data-use terms and acknowledgements.",
+      "rights_url": "https://irsa.ipac.caltech.edu/data_use_terms.html",
+      "tags": ["OpenUniverse2024", "WFI", "simulation"],
+      "products": [{"url": "https://irsa.ipac.caltech.edu/data/theory/openuniverse2024/download.html", "subtype": "collection_inventory", "media_type": "text/html", "is_original": true}],
+      "renditions": [{"url": "https://roman.ipac.caltech.edu/sims/Simulations_csv/DummyImages/OU2024_preview.jpg", "width": 640, "height": 640, "format": "image/jpeg", "provider": "IPAC_IRSA"}]
+    }
+  ]
+}

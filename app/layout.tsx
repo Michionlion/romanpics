@@ -1,55 +1,34 @@
 import type { Metadata } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
+import { PublicFooter, PublicHeader } from '@/components/site-chrome';
 import './globals.css';
 
-const geistSans = Geist({
-  variable: '--font-geist-sans',
-  subsets: ['latin'],
-});
-
-const geistMono = Geist_Mono({
-  variable: '--font-geist-mono',
-  subsets: ['latin'],
-});
+const geist = Geist({ variable: '--font-geist', subsets: ['latin'] });
+const mono = Geist_Mono({ variable: '--font-mono', subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'RomanPics — Explore the Roman Space Telescope',
-  description:
-    'A friendly, community-curated guide to imagery from NASA’s Nancy Grace Roman Space Telescope.',
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? 'https://romanpics.michionlion.chatgpt.site'),
+  title: { default: 'RomanPics — The wide universe, easy to explore', template: '%s · RomanPics' },
+  description: 'Find, understand, and share public imagery related to NASA’s Nancy Grace Roman Space Telescope.',
   openGraph: {
-    title: 'RomanPics — Explore the Roman Space Telescope',
-    description: 'The wide universe, easy to explore.',
+    title: 'RomanPics — The wide universe, easy to explore',
+    description: 'A friendly, community-curated guide to Roman imagery.',
     type: 'website',
-    images: [
-      {
-        url: 'https://raw.githubusercontent.com/Michionlion/romanpics/main/public/og.png',
-        width: 1200,
-        height: 630,
-        alt: 'RomanPics — The wide universe, easy to explore.',
-      },
-    ],
+    images: [{ url: '/og.png', alt: 'RomanPics — The wide universe, easy to explore.' }],
   },
-  twitter: {
-    card: 'summary_large_image',
-    title: 'RomanPics — Explore the Roman Space Telescope',
-    description: 'The wide universe, easy to explore.',
-    images: [
-      'https://raw.githubusercontent.com/Michionlion/romanpics/main/public/og.png',
-    ],
-  },
+  twitter: { card: 'summary_large_image' },
+  alternates: { types: { 'application/rss+xml': '/feed.xml', 'application/atom+xml': '/atom.xml' } },
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-      >
+      <body className={`${geist.variable} ${mono.variable}`}>
+        <a className="skip-link" href="#main-content">Skip to content</a>
+        <PublicHeader />
+        <div className="ambient" aria-hidden="true" />
         {children}
+        <PublicFooter />
       </body>
     </html>
   );

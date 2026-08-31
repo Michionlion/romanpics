@@ -1,0 +1,364 @@
+name: ${COMPOSE_PROJECT_NAME:-romanpics}
+
+x-api-environment: &api-environment
+  APP_NAME: ${APP_NAME:-RomanPics API}
+  ENVIRONMENT: ${ENVIRONMENT:-production}
+  PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?Set PUBLIC_BASE_URL to the browser-facing site URL}
+  ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:?Set ALLOWED_ORIGINS to exact comma-separated browser origins}
+  COOKIE_NAME: ${COOKIE_NAME:-romanpics_visitor}
+  COOKIE_SECURE: ${COOKIE_SECURE:-true}
+  COOKIE_SAMESITE: ${COOKIE_SAMESITE:-lax}
+  COOKIE_MAX_AGE_SECONDS: ${COOKIE_MAX_AGE_SECONDS:-31536000}
+  MANIFEST_PATH: ${MANIFEST_PATH:-/catalog/catalog.json}
+  MAST_FIXTURE_ENABLED: ${MAST_FIXTURE_ENABLED:-false}
+  MAX_SYNC_PAGES: ${MAX_SYNC_PAGES:-25}
+  RATE_LIMIT_VOTES_PER_MINUTE: ${RATE_LIMIT_VOTES_PER_MINUTE:-30}
+  LINK_CHECK_TIMEOUT_SECONDS: ${LINK_CHECK_TIMEOUT_SECONDS:-10}
+  ALLOWED_UPSTREAM_HOSTS: ${ALLOWED_UPSTREAM_HOSTS:-images.nasa.gov,images-api.nasa.gov,images-assets.nasa.gov,svs.gsfc.nasa.gov,archive.stsci.edu,mast.stsci.edu,irsa.ipac.caltech.edu,roman.ipac.caltech.edu}
+  POSTGRES_DB: ${POSTGRES_DB:-romanpics}
+
+x-api-common: &api-common
+  image: romanpics-api:${ROMANPICS_IMAGE_TAG:-local}
+  build:
+    context: ./services/api
+  init: true
+  volumes:
+    - ./data/catalog.json:/catalog/catalog.json:ro
+  networks:
+    - catalog
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+  cap_drop:
+    - ALL
+  cap_add:
+    # A short root-owned bootstrap shell reads Docker's bind-mounted secrets,
+    # then immediately drops to the image's unprivileged `romanpics` account.
+    - DAC_READ_SEARCH
+    - SETGID
+    - SETUID
+  user: "0:0"
+  security_opt:
+    - no-new-privileges:true
+  pids_limit: 256
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-romanpics}
+      # Keep the default bootstrap name compatible with an existing volume.
+      # This superuser credential is mounted only into postgres/db-bootstrap.
+      POSTGRES_USER: ${POSTGRES_BOOTSTRAP_USER:-romanpics}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_bootstrap_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+    secrets:
+      - postgres_bootstrap_password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - catalog
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    stop_grace_period: 60s
+    shm_size: 128mb
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  db-bootstrap:
+    image: postgres:17-alpine
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-romanpics}
+      POSTGRES_BOOTSTRAP_USER: ${POSTGRES_BOOTSTRAP_USER:-romanpics}
+      POSTGRES_MIGRATION_USER: ${POSTGRES_MIGRATION_USER:-romanpics_migrator}
+      POSTGRES_API_USER: ${POSTGRES_API_USER:-romanpics_api}
+      POSTGRES_WORKER_USER: ${POSTGRES_WORKER_USER:-romanpics_worker}
+    secrets:
+      - postgres_bootstrap_password
+      - postgres_migration_password
+      - postgres_api_password
+      - postgres_worker_password
+    volumes:
+      - ./infra/postgres:/postgres-bootstrap:ro
+    networks:
+      - catalog
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_READ_SEARCH
+    user: "0:0"
+    security_opt:
+      - no-new-privileges:true
+    command: [/bin/sh, /postgres-bootstrap/bootstrap-roles.sh]
+
+  migrate:
+    <<: *api-common
+    restart: "no"
+    depends_on:
+      db-bootstrap:
+        condition: service_completed_successfully
+    environment:
+      <<: *api-environment
+      POSTGRES_USER: ${POSTGRES_MIGRATION_USER:-romanpics_migrator}
+    secrets:
+      - postgres_migration_password
+      - visitor_signing_secret
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        db_password="$$(tr -d '\r\n' < /run/secrets/postgres_migration_password)"
+        visitor_secret="$$(tr -d '\r\n' < /run/secrets/visitor_signing_secret)"
+        export DATABASE_URL="postgresql+psycopg://$${POSTGRES_USER}:$${db_password}@postgres:5432/$${POSTGRES_DB}"
+        export VISITOR_SIGNING_SECRET="$${visitor_secret}"
+        runtime_uid="$$(id -u romanpics)"
+        runtime_gid="$$(id -g romanpics)"
+        exec setpriv --reuid="$${runtime_uid}" --regid="$${runtime_gid}" \
+          --clear-groups --no-new-privs alembic upgrade head
+
+  db-grants:
+    image: postgres:17-alpine
+    restart: "no"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-romanpics}
+      POSTGRES_MIGRATION_USER: ${POSTGRES_MIGRATION_USER:-romanpics_migrator}
+      POSTGRES_API_USER: ${POSTGRES_API_USER:-romanpics_api}
+      POSTGRES_WORKER_USER: ${POSTGRES_WORKER_USER:-romanpics_worker}
+    secrets:
+      - postgres_migration_password
+    volumes:
+      - ./infra/postgres:/postgres-bootstrap:ro
+    networks:
+      - catalog
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_READ_SEARCH
+    user: "0:0"
+    security_opt:
+      - no-new-privileges:true
+    command: [/bin/sh, /postgres-bootstrap/apply-grants.sh]
+
+  seed:
+    <<: *api-common
+    restart: "no"
+    depends_on:
+      db-grants:
+        condition: service_completed_successfully
+    environment:
+      <<: *api-environment
+      POSTGRES_USER: ${POSTGRES_MIGRATION_USER:-romanpics_migrator}
+    secrets:
+      - postgres_migration_password
+      - visitor_signing_secret
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        db_password="$$(tr -d '\r\n' < /run/secrets/postgres_migration_password)"
+        visitor_secret="$$(tr -d '\r\n' < /run/secrets/visitor_signing_secret)"
+        export DATABASE_URL="postgresql+psycopg://$${POSTGRES_USER}:$${db_password}@postgres:5432/$${POSTGRES_DB}"
+        export VISITOR_SIGNING_SECRET="$${visitor_secret}"
+        runtime_uid="$$(id -u romanpics)"
+        runtime_gid="$$(id -g romanpics)"
+        exec setpriv --reuid="$${runtime_uid}" --regid="$${runtime_gid}" \
+          --clear-groups --no-new-privs romanpics seed --manifest /catalog/catalog.json
+
+  operator:
+    <<: *api-common
+    profiles: [operator]
+    restart: "no"
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    environment:
+      <<: *api-environment
+      POSTGRES_USER: ${POSTGRES_MIGRATION_USER:-romanpics_migrator}
+    secrets:
+      - postgres_migration_password
+      - visitor_signing_secret
+    volumes:
+      - ./data/catalog.json:/catalog/catalog.json:ro
+      - ./infra/postgres/operator-entrypoint.sh:/operator-entrypoint.sh:ro
+    entrypoint: [/bin/sh, /operator-entrypoint.sh]
+    command: [--help]
+
+  api:
+    <<: *api-common
+    restart: unless-stopped
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    environment:
+      <<: *api-environment
+      POSTGRES_USER: ${POSTGRES_API_USER:-romanpics_api}
+    secrets:
+      - postgres_api_password
+      - visitor_signing_secret
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        db_password="$$(tr -d '\r\n' < /run/secrets/postgres_api_password)"
+        visitor_secret="$$(tr -d '\r\n' < /run/secrets/visitor_signing_secret)"
+        export DATABASE_URL="postgresql+psycopg://$${POSTGRES_USER}:$${db_password}@postgres:5432/$${POSTGRES_DB}"
+        export VISITOR_SIGNING_SECRET="$${visitor_secret}"
+        runtime_uid="$$(id -u romanpics)"
+        runtime_gid="$$(id -g romanpics)"
+        exec setpriv --reuid="$${runtime_uid}" --regid="$${runtime_gid}" \
+          --clear-groups --no-new-privs uvicorn romanpics_api.main:app \
+          --host 0.0.0.0 \
+          --port 8000 \
+          --proxy-headers \
+          --forwarded-allow-ips '*'
+    expose:
+      - "8000"
+    ports:
+      - "${API_BIND_ADDRESS:-127.0.0.1}:${API_PORT:-8080}:8000"
+    # The volume is read-only here solely so Compose validates the same named
+    # volume Nginx serves. A future contract-compatible worker will be its only
+    # writer; the API never stores originals in it.
+    volumes:
+      - ./data/catalog.json:/catalog/catalog.json:ro
+      - previews:/previews:ro
+    networks:
+      catalog:
+      edge:
+        aliases:
+          - romanpics-api
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=2)
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    stop_grace_period: 30s
+
+  worker:
+    profiles: [worker]
+    image: romanpics-worker:${ROMANPICS_IMAGE_TAG:-local}
+    build:
+      context: ./services/worker
+    init: true
+    restart: unless-stopped
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - |
+        db_password="$$(tr -d '\r\n' < /run/secrets/postgres_worker_password)"
+        export DATABASE_URL="postgresql+psycopg://$${POSTGRES_USER}:$${db_password}@postgres:5432/$${POSTGRES_DB}"
+        runtime_uid="$$(id -u worker)"
+        runtime_gid="$$(id -g worker)"
+        exec setpriv --reuid="$${runtime_uid}" --regid="$${runtime_gid}" \
+          --clear-groups --no-new-privs romanpics-worker work \
+          --database-url "$${DATABASE_URL}" \
+          --forever \
+          --poll-interval "$${WORKER_POLL_INTERVAL}" \
+          --heartbeat-interval "$${WORKER_HEARTBEAT_INTERVAL}" \
+          --recover-stale-after "$${WORKER_STALE_LEASE_SECONDS}" \
+          --preview-dir /previews \
+          --preview-base-url "$${PREVIEW_PUBLIC_BASE_URL}" \
+          --enable-network \
+          --max-bytes "$${WORKER_MAX_DOWNLOAD_BYTES}" \
+          --allow-host images.nasa.gov \
+          --allow-host images-api.nasa.gov \
+          --allow-host images-assets.nasa.gov \
+          --allow-host svs.gsfc.nasa.gov \
+          --allow-host archive.stsci.edu \
+          --allow-host mast.stsci.edu \
+          --allow-host irsa.ipac.caltech.edu \
+          --allow-host roman.ipac.caltech.edu
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-romanpics}
+      POSTGRES_USER: ${POSTGRES_WORKER_USER:-romanpics_worker}
+      PREVIEW_PUBLIC_BASE_URL: ${PREVIEW_PUBLIC_BASE_URL:?Set PREVIEW_PUBLIC_BASE_URL to the HTTPS public /previews URL}
+      WORKER_POLL_INTERVAL: ${WORKER_POLL_INTERVAL:-1}
+      WORKER_HEARTBEAT_INTERVAL: ${WORKER_HEARTBEAT_INTERVAL:-30}
+      WORKER_STALE_LEASE_SECONDS: ${WORKER_STALE_LEASE_SECONDS:-300}
+      WORKER_MAX_DOWNLOAD_BYTES: ${WORKER_MAX_DOWNLOAD_BYTES:-67108864}
+    secrets:
+      - postgres_worker_password
+    volumes:
+      - previews:/previews
+    networks:
+      - catalog
+      - egress
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_READ_SEARCH
+      - SETGID
+      - SETUID
+    user: "0:0"
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    stop_grace_period: 45s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  postgres-data:
+  previews:
+    name: ${ROMANPICS_PREVIEW_VOLUME:-romanpics-previews}
+    external: true
+
+networks:
+  catalog:
+    internal: true
+  egress:
+  edge:
+    name: ${ROMANPICS_EDGE_NETWORK:-romanpics-edge}
+    external: true
+
+secrets:
+  postgres_bootstrap_password:
+    file: ${POSTGRES_BOOTSTRAP_PASSWORD_FILE:?Set POSTGRES_BOOTSTRAP_PASSWORD_FILE to an absolute secret-file path}
+  postgres_migration_password:
+    file: ${POSTGRES_MIGRATION_PASSWORD_FILE:?Set POSTGRES_MIGRATION_PASSWORD_FILE to an absolute secret-file path}
+  postgres_api_password:
+    file: ${POSTGRES_API_PASSWORD_FILE:?Set POSTGRES_API_PASSWORD_FILE to an absolute secret-file path}
+  postgres_worker_password:
+    file: ${POSTGRES_WORKER_PASSWORD_FILE:?Set POSTGRES_WORKER_PASSWORD_FILE to an absolute secret-file path}
+  visitor_signing_secret:
+    file: ${VISITOR_SIGNING_SECRET_FILE:?Set VISITOR_SIGNING_SECRET_FILE to an absolute secret-file path}

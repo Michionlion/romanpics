@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "records": [
+    {
+      "external_id": "r0000101001001001001-coadd-prompt-v1",
+      "slug": "fixture-roman-first-light",
+      "provider": "MAST_ROMAN",
+      "canonical_url": "https://mast.stsci.edu/roman-fixtures/r0000101001001001001-coadd-prompt-v1",
+      "title": "Fixture Roman prompt mosaic, reprocessed",
+      "summary": "Updated metadata for the same non-versioned prompt-product identity.",
+      "content_class": "FLIGHT_SCIENCE",
+      "is_flight_data": true,
+      "alt_text": "A reprocessed synthetic fixture representing a future Roman mosaic preview.",
+      "credit": "NASA / STScI (fixture; not real flight data)",
+      "processing_note": "Test fixture only. Models prompt overwrite behavior.",
+      "tags": ["fixture", "WFI", "mosaic", "reprocessed"],
+      "observation": {"observation_id": "r0000101001001001001", "instrument": "WFI", "mode": "imaging", "optical_elements": ["F158"], "target": "Fixture Field", "ra": 150.0, "dec": 2.0, "data_level": "L3", "product_version": "prompt-v1", "pipeline_version": "0.2-fixture", "release_name": "prompt"},
+      "products": [{"url": "https://mast.stsci.edu/roman-fixtures/r0000101001001001001_coadd.asdf", "subtype": "coadd", "media_type": "application/x-asdf", "data_level": "L3", "is_original": true}],
+      "renditions": [{"url": "https://mast.stsci.edu/roman-fixtures/r0000101001001001001_preview.jpg", "width": 768, "height": 768, "format": "image/jpeg", "provider": "MAST_ROMAN"}]
+    }
+  ]
+}

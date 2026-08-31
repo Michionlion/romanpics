@@ -1,0 +1,42 @@
+name: Source or image request
+description: Suggest an authoritative Roman source or a missing public record.
+title: '[source] '
+labels: ['source-review']
+body:
+  - type: input
+    id: source_url
+    attributes:
+      label: Authoritative source URL
+      description: Link to NASA, STScI/MAST, IPAC/IRSA, or another original publisher.
+      placeholder: https://...
+    validations:
+      required: true
+  - type: dropdown
+    id: content_class
+    attributes:
+      label: Content class
+      options:
+        - Flight science
+        - Simulation
+        - Mission photo
+        - Visualization
+        - Ground test
+        - Unsure
+    validations:
+      required: true
+  - type: textarea
+    id: provenance
+    attributes:
+      label: Provenance and credit
+      description: Include any supplied credit, rights link, archive ID, and why this belongs.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I linked the original publisher rather than a repost.
+          required: true
+        - label: I did not upload or relicense the upstream image.
+          required: true

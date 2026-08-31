@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://romanpics.org/contracts/jobs-v1.json",
+  "title": "RomanPics worker job contract v1",
+  "oneOf": [
+    {
+      "title": "render",
+      "type": "object",
+      "required": ["job_type", "payload_json"],
+      "properties": {
+        "job_type": {"const": "render"},
+        "payload_json": {
+          "type": "object",
+          "required": ["item_id", "product_id", "recipe"],
+          "properties": {
+            "item_id": {"type": "string", "format": "uuid"},
+            "product_id": {"type": "string", "format": "uuid"},
+            "recipe": {"type": "object"}
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "title": "embed",
+      "type": "object",
+      "required": ["job_type", "payload_json"],
+      "properties": {
+        "job_type": {"const": "embed"},
+        "payload_json": {
+          "type": "object",
+          "required": ["item_id", "source_record_id", "checksum"],
+          "properties": {
+            "item_id": {"type": "string", "format": "uuid"},
+            "source_record_id": {"type": "string", "format": "uuid"},
+            "checksum": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "title": "cluster",
+      "type": "object",
+      "required": ["job_type", "payload_json"],
+      "properties": {
+        "job_type": {"const": "cluster"},
+        "payload_json": {
+          "type": "object",
+          "required": ["source_id", "ingest_run_id"],
+          "properties": {
+            "source_id": {"type": "string", "format": "uuid"},
+            "ingest_run_id": {"type": "string", "format": "uuid"}
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "title": "link-check",
+      "type": "object",
+      "required": ["job_type", "payload_json"],
+      "properties": {
+        "job_type": {"const": "link-check"},
+        "payload_json": {
+          "type": "object",
+          "required": ["scope"],
+          "properties": {"scope": {"type": "string"}},
+          "additionalProperties": false
+        }
+      }
+    }
+  ]
+}

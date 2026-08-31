@@ -4,20 +4,381 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  validate:
+  frontend:
+    name: Frontend and catalog
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: services/api/uv.lock
       - run: npm ci
-      - run: npm audit --omit=dev
+      - run: npm audit --omit=dev --audit-level=high
       - run: npm run check
+
+  api:
+    name: API unit and migration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: services/api
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: services/api/uv.lock
+      - run: uv sync --locked --extra dev
+      - run: uv run pip-audit --local
+      - run: uv run ruff check .
+      - run: uv run pytest
+      - name: Exercise Alembic on SQLite
+        env:
+          DATABASE_URL: sqlite:///${{ runner.temp }}/romanpics-migration.db
+          COOKIE_SECURE: "false"
+        run: |
+          uv run alembic upgrade head
+          uv run alembic current
+      - run: uv build
+
+  worker:
+    name: Worker unit and package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: romanpics_worker_test
+          POSTGRES_USER: romanpics
+          POSTGRES_PASSWORD: romanpics-test-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U romanpics -d romanpics_worker_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    defaults:
+      run:
+        working-directory: services/worker
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: services/worker/uv.lock
+      - run: uv sync --locked --extra dev
+      - run: uv run pip-audit --local
+      - run: uv run ruff check .
+      - run: uv run pytest
+        env:
+          ROMANPICS_TEST_DATABASE_URL: postgresql://romanpics:romanpics-test-only@127.0.0.1:5432/romanpics_worker_test
+      - run: uv build
+
+  containers:
+    name: Compose worker persistence
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [frontend, api, worker]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Prepare ephemeral infrastructure
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          secret_dir="$RUNNER_TEMP/romanpics-secrets"
+          install -d -m 700 "$secret_dir"
+          for secret_name in \
+            postgres_bootstrap_password \
+            postgres_migration_password \
+            postgres_api_password \
+            postgres_worker_password
+          do
+            openssl rand -hex 32 > "$secret_dir/$secret_name"
+          done
+          openssl rand -hex 32 > "$secret_dir/visitor_signing_secret"
+          chmod 600 "$secret_dir"/*
+
+          edge_network="romanpics-edge-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          preview_volume="romanpics-previews-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          compose_env="$RUNNER_TEMP/romanpics-compose.env"
+          {
+            echo "COMPOSE_PROJECT_NAME=romanpics-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            echo "ROMANPICS_IMAGE_TAG=ci-${GITHUB_SHA}"
+            echo "ROMANPICS_EDGE_NETWORK=$edge_network"
+            echo "ROMANPICS_PREVIEW_VOLUME=$preview_volume"
+            echo "API_BIND_ADDRESS=127.0.0.1"
+            echo "API_PORT=18080"
+            echo "POSTGRES_DB=romanpics"
+            echo "POSTGRES_BOOTSTRAP_USER=romanpics"
+            echo "POSTGRES_MIGRATION_USER=romanpics_migrator"
+            echo "POSTGRES_API_USER=romanpics_api"
+            echo "POSTGRES_WORKER_USER=romanpics_worker"
+            echo "POSTGRES_BOOTSTRAP_PASSWORD_FILE=$secret_dir/postgres_bootstrap_password"
+            echo "POSTGRES_MIGRATION_PASSWORD_FILE=$secret_dir/postgres_migration_password"
+            echo "POSTGRES_API_PASSWORD_FILE=$secret_dir/postgres_api_password"
+            echo "POSTGRES_WORKER_PASSWORD_FILE=$secret_dir/postgres_worker_password"
+            echo "VISITOR_SIGNING_SECRET_FILE=$secret_dir/visitor_signing_secret"
+            echo "PUBLIC_BASE_URL=https://app.test"
+            echo "ALLOWED_ORIGINS=https://app.test"
+            echo "COOKIE_SECURE=true"
+            echo "PREVIEW_PUBLIC_BASE_URL=https://app.test/previews"
+          } > "$compose_env"
+
+          docker network create "$edge_network"
+          docker volume create "$preview_volume"
+          echo "COMPOSE_ENV=$compose_env" >> "$GITHUB_ENV"
+          echo "EDGE_NETWORK=$edge_network" >> "$GITHUB_ENV"
+          echo "PREVIEW_VOLUME=$preview_volume" >> "$GITHUB_ENV"
+
+      - name: Validate Compose model
+        run: docker compose --profile worker --env-file "$COMPOSE_ENV" config --quiet
+
+      - name: Build production API and worker images
+        run: docker compose --profile worker --env-file "$COMPOSE_ENV" build api worker
+
+      - name: Start production-shaped API stack
+        run: docker compose --env-file "$COMPOSE_ENV" up --detach --wait api
+
+      - name: Stage deterministic worker inputs and enqueue a durable link check
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error http://127.0.0.1:18080/readyz
+          curl --fail --silent --show-error \
+            'http://127.0.0.1:18080/v1/items?limit=1' > "$RUNNER_TEMP/items.json"
+
+          # Keep the integration gate independent of upstream media availability.
+          # The ephemeral catalog points every embed job at one generated rendition
+          # in the real preview volume. Other link targets use a deliberately
+          # disallowed host, so the link-check worker persists both successful local
+          # checks and isolated policy failures without making external requests.
+          docker run --rm \
+            --volume "$PREVIEW_VOLUME:/previews" \
+            --volume "$GITHUB_WORKSPACE/public:/ci-fixtures:ro" \
+            postgres:17-alpine sh -ec '
+              install -d -m 755 /previews/ci
+              install -m 644 /ci-fixtures/og.png /previews/ci/catalog.png
+            '
+          docker compose --env-file "$COMPOSE_ENV" exec -T postgres \
+            psql -v ON_ERROR_STOP=1 -U romanpics -d romanpics <<'SQL'
+          UPDATE source_record
+          SET canonical_url = 'https://app.test/ci/source/' || id;
+
+          UPDATE archive_product
+          SET external_url = 'https://app.test/ci/product/' || id;
+
+          DELETE FROM rendition;
+          INSERT INTO rendition (
+            id, item_id, provider, url, width, height, format,
+            is_site_derivative, recipe, alt_text, credit, rights, rights_url,
+            role, last_verified_at, created_at, updated_at
+          )
+          SELECT
+            item.id, item.id, 'romanpics-ci',
+            'https://app.test/previews/ci/catalog.png', 1200, 630, 'png',
+            true, '{"fixture":"compose-ci"}', item.alt_text,
+            'RomanPics deterministic CI fixture', NULL, NULL, 'preview',
+            CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+          FROM gallery_item AS item;
+          SQL
+
+          docker compose --profile operator --env-file "$COMPOSE_ENV" run --rm \
+            operator enqueue-link-check > "$RUNNER_TEMP/link-check-enqueue.json"
+
+      - name: Start the production-shaped worker profile
+        run: |
+          docker compose --profile worker --env-file "$COMPOSE_ENV" \
+            up --detach --wait --wait-timeout 60 worker
+
+      - name: Drain jobs and verify computed catalog persistence
+        shell: bash
+        run: |
+          set -euo pipefail
+          rp_sql() {
+            docker compose --env-file "$COMPOSE_ENV" exec -T postgres \
+              psql -v ON_ERROR_STOP=1 -U romanpics -d romanpics -Atc "$1"
+          }
+
+          deadline=$((SECONDS + 240))
+          while :; do
+            failed="$(rp_sql "select count(*) from jobs where status = 'failed';")"
+            pending="$(rp_sql "select count(*) from jobs where status in ('queued', 'running');")"
+            if (( failed > 0 )); then
+              docker compose --env-file "$COMPOSE_ENV" exec -T postgres \
+                psql -U romanpics -d romanpics -c \
+                "select job_type, attempts, left(coalesce(error,''),300) as error from jobs where status = 'failed';"
+              exit 1
+            fi
+            if (( pending == 0 )); then
+              break
+            fi
+            if (( SECONDS >= deadline )); then
+              echo "worker queue did not drain before the 240-second deadline" >&2
+              exit 1
+            fi
+            sleep 2
+          done
+
+          test "$(rp_sql "select count(*) from jobs where job_type = 'embed' and status = 'succeeded';")" -ge 8
+          test "$(rp_sql "select count(*) from jobs where job_type = 'cluster' and status = 'succeeded';")" -ge 1
+          test "$(rp_sql "select count(*) from jobs where job_type = 'link-check' and status = 'succeeded';")" -eq 1
+          test "$(rp_sql 'select count(*) from embedding;')" -ge 8
+          test "$(rp_sql "select count(*) from cluster where archived_at is null and algorithm_version not like 'fixture%';")" -ge 1
+
+      - name: Verify split roles, computed graph, and seed replay
+        shell: bash
+        run: |
+          set -euo pipefail
+          rp_sql() {
+            docker compose --env-file "$COMPOSE_ENV" exec -T postgres \
+              psql -v ON_ERROR_STOP=1 -U romanpics -d romanpics -Atc "$1"
+          }
+          privilege_check="$(docker compose --env-file "$COMPOSE_ENV" exec -T postgres \
+            psql -U romanpics -d romanpics -At <<'SQL'
+          SELECT
+            (SELECT NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole
+             FROM pg_roles WHERE rolname = 'romanpics_api')
+            AND
+            (SELECT NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole
+             FROM pg_roles WHERE rolname = 'romanpics_worker')
+            AND pg_get_userbyid((SELECT datdba FROM pg_database WHERE datname = 'romanpics'))
+                = 'romanpics_migrator'
+            AND NOT has_database_privilege('romanpics_api', 'romanpics', 'CREATE')
+            AND NOT has_schema_privilege('romanpics_api', 'public', 'CREATE')
+            AND has_table_privilege('romanpics_api', 'gallery_item', 'SELECT')
+            AND NOT has_column_privilege(
+              'romanpics_api', 'gallery_item', 'title', 'UPDATE'
+            )
+            AND has_table_privilege('romanpics_api', 'active_vote', 'INSERT')
+            AND has_table_privilege('romanpics_api', 'active_vote', 'DELETE')
+            AND has_table_privilege('romanpics_api', 'vote_event', 'INSERT')
+            AND NOT has_table_privilege('romanpics_api', 'vote_event', 'SELECT')
+            AND has_table_privilege('romanpics_worker', 'jobs', 'INSERT')
+            AND has_column_privilege(
+              'romanpics_worker', 'jobs', 'status', 'UPDATE'
+            )
+            AND has_table_privilege('romanpics_worker', 'cluster', 'INSERT')
+            AND has_column_privilege(
+              'romanpics_worker', 'cluster', 'archived_at', 'UPDATE'
+            )
+            AND has_table_privilege(
+              'romanpics_worker', 'cluster_member', 'DELETE'
+            )
+            AND has_table_privilege(
+              'romanpics_worker', 'similarity_edge', 'DELETE'
+            )
+            AND has_table_privilege('romanpics_worker', 'link_check', 'INSERT')
+            AND has_table_privilege('romanpics_worker', 'link_check', 'SELECT')
+            AND has_column_privilege(
+              'romanpics_worker', 'link_check', 'checked_at', 'UPDATE'
+            )
+            AND has_function_privilege(
+              'romanpics_worker',
+              'pg_catalog.pg_advisory_xact_lock(bigint)',
+              'EXECUTE'
+            )
+            AND NOT has_function_privilege(
+              'romanpics_api',
+              'pg_catalog.pg_advisory_xact_lock(bigint)',
+              'EXECUTE'
+            )
+            AND has_column_privilege(
+              'romanpics_worker', 'gallery_item', 'editorial_state', 'UPDATE'
+            )
+            AND NOT has_column_privilege(
+              'romanpics_worker', 'gallery_item', 'title', 'UPDATE'
+            )
+            AND NOT has_table_privilege('romanpics_worker', 'source_record', 'UPDATE');
+          SQL
+          )"
+          test "$privilege_check" = t
+          test "$(rp_sql "select count(distinct member.item_id) from cluster_member as member join cluster on cluster.id = member.cluster_id where cluster.archived_at is null and cluster.algorithm_version not like 'fixture%';")" -ge 8
+          test "$(rp_sql "select count(*) from (select member.cluster_id from cluster_member as member join cluster on cluster.id = member.cluster_id join gallery_item as item on item.id = member.item_id where cluster.archived_at is null group by member.cluster_id having count(distinct item.content_class) > 1) as mixed;")" -eq 0
+          test "$(rp_sql "select count(*) from similarity_edge where algorithm_version not like 'fixture%';")" -ge 1
+          link_rows="$(rp_sql 'select count(*) from link_check;')"
+          test "$link_rows" -ge 8
+          test "$(rp_sql "select count(*) from link_check where target_kind = 'rendition' and ok;")" -ge 8
+          test "$(rp_sql "select (result_json->'persistence'->>'persisted')::integer from jobs where job_type = 'link-check' and status = 'succeeded' order by created_at desc limit 1;")" -eq "$link_rows"
+
+          graph_before="$(rp_sql "
+            select md5(string_agg(line, E'\\n' order by line))
+            from (
+              select concat_ws('|', 'cluster', id, slug, algorithm_version,
+                               coalesce(representative_item_id, ''),
+                               coalesce(archived_at::text, '')) as line
+              from cluster
+              union all
+              select concat_ws('|', 'member', cluster_id, item_id,
+                               similarity::text, rank::text)
+              from cluster_member
+              union all
+              select concat_ws('|', 'edge', id, item_id, related_item_id,
+                               score::text, reasons::text, algorithm_version)
+              from similarity_edge
+            ) as graph;")"
+          test -n "$graph_before"
+
+          docker compose --env-file "$COMPOSE_ENV" run --rm seed > /dev/null
+          docker compose --env-file "$COMPOSE_ENV" run --rm seed > /dev/null
+          graph_after="$(rp_sql "
+            select md5(string_agg(line, E'\\n' order by line))
+            from (
+              select concat_ws('|', 'cluster', id, slug, algorithm_version,
+                               coalesce(representative_item_id, ''),
+                               coalesce(archived_at::text, '')) as line
+              from cluster
+              union all
+              select concat_ws('|', 'member', cluster_id, item_id,
+                               similarity::text, rank::text)
+              from cluster_member
+              union all
+              select concat_ws('|', 'edge', id, item_id, related_item_id,
+                               score::text, reasons::text, algorithm_version)
+              from similarity_edge
+            ) as graph;")"
+          test "$graph_after" = "$graph_before"
+          test "$(rp_sql 'select count(*) from gallery_item;')" -ge 8
+          test "$(rp_sql "select count(*) from cluster where archived_at is null and algorithm_version not like 'fixture%';")" -ge 1
+
+      - name: Show diagnostics on failure
+        if: failure()
+        run: |
+          docker compose --env-file "$COMPOSE_ENV" ps || true
+          docker compose --env-file "$COMPOSE_ENV" logs --no-color || true
+
+      - name: Clean up
+        if: always()
+        shell: bash
+        run: |
+          docker compose --env-file "$COMPOSE_ENV" down --volumes --remove-orphans || true
+          docker network rm "$EDGE_NETWORK" || true
+          docker volume rm "$PREVIEW_VOLUME" || true

@@ -1,0 +1,16 @@
+# Temporary HTTP-only configuration for the first ACME certificate issuance.
+# Replace the hostname, copy into the existing Nginx conf.d directory, test,
+# reload, obtain the certificate, then replace this with the TLS template.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name api.romanpics.example.org;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 503;
+    }
+}

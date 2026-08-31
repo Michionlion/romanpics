@@ -1,0 +1,2 @@
+import { sourceStatuses } from '@/lib/catalog';
+export function GET() { return Response.json({ data: sourceStatuses.map((source) => ({ adapter: source.id, state: source.state === 'healthy' ? 'healthy' : 'delayed', last_success_at: source.lastSuccessAt ?? null, last_error_at: null, public_message: source.note, record_count: source.records })), mode: 'fixture' }, { headers: { 'Cache-Control': 'public, max-age=60', 'X-RomanPics-Mode': 'fixture' } }); }
