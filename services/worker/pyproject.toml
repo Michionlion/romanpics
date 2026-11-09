@@ -21,7 +21,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pip-audit>=2.9,<3", "pytest>=8.3,<10", "pytest-cov>=5,<8", "ruff>=0.6,<1"]
-openclip = ["open-clip-torch>=2.26,<4", "torch>=2.3,<3"]
+openclip = ["open-clip-torch>=2.26,<5", "torch>=2.3,<3"]
 siglip = ["transformers>=4.44,<6", "torch>=2.3,<3"]
 
 [project.scripts]
